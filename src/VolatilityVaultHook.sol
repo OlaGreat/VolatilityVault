@@ -49,6 +49,7 @@ contract VolatilityVaultHook is IHooks {
     address      public immutable yieldBuffer;
 
     /// @notice Minimum swap size (in absolute token units) to be flagged as toxic.
+    /// @dev Stored in contract storage (not immutable) for vm.etch compatibility in tests.
     uint256 public toxicOrderThreshold;
 
     /// @notice LP address → pool → their stated intent.
