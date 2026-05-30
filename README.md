@@ -423,10 +423,11 @@ forge test --gas-report
 
 | Suite | Tests | What it covers |
 |---|---|---|
-| `VRSOracleTest` | 17 | Score updates, fee tiers, access control, fuzz (2 suites × 256 runs) |
-| `VolatilityVaultHookTest` | WIP | Fee override, toxic detection, LP intent, onlyPoolManager guard |
-| `YieldBufferTest` | WIP | ERC-4626 compliance, yield routing, distribution, share accounting |
+| `VRSOracleTest` | 17 | Score updates, fee tiers, access control, 2 fuzz suites (256 runs each) |
+| `VolatilityVaultHookTest` | 18 | Dynamic fee override, toxic order detection, LP intent registration, onlyPoolManager guard — full PoolManager integration |
+| `YieldBufferTest` | 24 | LP registration, fee accrual, yield deployment, epoch distribution, proportional claims, multi-epoch, 1 fuzz suite |
 | `IntegrationTest` | WIP | Oracle → hook → buffer → LP payout end-to-end |
+| **Total** | **59** | **All passing** |
 
 ---
 
