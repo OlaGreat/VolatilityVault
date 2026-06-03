@@ -306,11 +306,22 @@ Pool must be initialized with `LPFeeLibrary.DYNAMIC_FEE_FLAG` (`0x800000`).
 
 | Contract | Address |
 |---|---|
-| `VRSOracle` | TBD |
-| `VolatilityVaultHook` | TBD |
-| `YieldBuffer` | TBD |
-| `LPPositionNFT` | TBD |
-| Uniswap V4 `PoolManager` | `0xe03A1074c86CFEdd5C142C4F04F1a1536E203543` |
+| `VRSOracle` | [`0x172c86F5b964d7836Cf055A76f5Ad316f0297198`](https://sepolia.etherscan.io/address/0x172c86F5b964d7836Cf055A76f5Ad316f0297198) |
+| `VolatilityVaultHook` | [`0x63Ce6162Af038c903fc21ECBE090A690eD5b85C0`](https://sepolia.etherscan.io/address/0x63Ce6162Af038c903fc21ECBE090A690eD5b85C0) |
+| `YieldBuffer` | [`0x2704187fbE9a0617312B5Eb7399508E760821BBc`](https://sepolia.etherscan.io/address/0x2704187fbE9a0617312B5Eb7399508E760821BBc) |
+| `LPPositionNFT` | [`0xb7d9Cf1BC3Aed3FAc9BbcF8d8Eb0BE94fb7462Cb`](https://sepolia.etherscan.io/address/0xb7d9Cf1BC3Aed3FAc9BbcF8d8Eb0BE94fb7462Cb) |
+| `MockYieldRouter` | [`0xa4F033fff30caa1525466EC792Ce6ae319F78a6b`](https://sepolia.etherscan.io/address/0xa4F033fff30caa1525466EC792Ce6ae319F78a6b) |
+| Uniswap V4 `PoolManager` | [`0xe03A1074c86CFEdd5C142C4F04F1a1536E203543`](https://sepolia.etherscan.io/address/0xe03A1074c86CFEdd5C142C4F04F1a1536E203543) |
+
+### Pool
+
+| Detail | Value |
+|---|---|
+| Pool ID | `0x0e32107f870f47cac70d5501dc91328470a9e53b583bc9c677bab6aaedb5436b` |
+| TOKEN0 (VTKA) | [`0x2348De1A41A08F461C5bBCB46c21a7e82c20456b`](https://sepolia.etherscan.io/address/0x2348De1A41A08F461C5bBCB46c21a7e82c20456b) |
+| TOKEN1 (VTKB) | [`0x73A3c4f9F7725D23C358606f1C7048463C56C521`](https://sepolia.etherscan.io/address/0x73A3c4f9F7725D23C358606f1C7048463C56C521) |
+| Fee | Dynamic (`0x800000`) — controlled by VRS oracle |
+| Tick Spacing | 60 |
 
 ### Reactive Network
 
