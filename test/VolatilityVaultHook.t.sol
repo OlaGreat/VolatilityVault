@@ -120,21 +120,26 @@ contract VolatilityVaultHookTest is Test {
             IYieldRouter(address(yieldRouter))
         );
 
-        // 6. Deploy hook impl with real constructor args, then etch to hookAddr.
-        //    Immutables (poolManager, oracle, yieldBuffer, threshold) are baked
-        //    into the runtime bytecode and are carried over by vm.etch.
+        // 6. Deploy hook impl, etch bytecode to hookAddr, then set storage slots.
+        //    poolManager and oracle are immutables (baked into bytecode by vm.etch).
+        //    yieldBuffer (slot 0), hookOwner (slot 1), toxicOrderThreshold (slot 2)
+        //    are storage variables — vm.etch copies bytecode only, not storage.
         VolatilityVaultHook impl = new VolatilityVaultHook(
             manager,
             oracle,
-            address(buffer),
+            address(0),   // placeholder — set via vm.store below
             TOXIC_THRESHOLD
         );
         vm.etch(hookAddr, address(impl).code);
         hook = VolatilityVaultHook(hookAddr);
 
-        // toxicOrderThreshold is a storage variable — vm.etch copies bytecode only.
-        // Use vm.store to write it to slot 0 at the etched address.
-        vm.store(hookAddr, bytes32(uint256(0)), bytes32(TOXIC_THRESHOLD));
+        // Set storage slots manually after etch
+        // Slot 0: yieldBuffer (address)
+        vm.store(hookAddr, bytes32(uint256(0)), bytes32(uint256(uint160(address(buffer)))));
+        // Slot 1: hookOwner (address)
+        vm.store(hookAddr, bytes32(uint256(1)), bytes32(uint256(uint160(address(this)))));
+        // Slot 2: toxicOrderThreshold (uint256)
+        vm.store(hookAddr, bytes32(uint256(2)), bytes32(TOXIC_THRESHOLD));
 
         // 7. Mint tokens and approve routers for this test contract
         token0.mint(address(this), 10_000_000e18);

@@ -65,14 +65,13 @@ contract DeployAll is Script {
         // ── 3. Mine a CREATE2 salt so the hook lands at an address with the
         //       correct permission bits in its lower 14 bits. ─────────────────
         //
-        // Constructor args needed for mining: we use a temporary placeholder
-        // for yieldBuffer since it doesn't exist yet. The hook address is what
-        // matters for the permission bits - the buffer address can be updated
-        // via setHook() on the YieldBuffer after both are deployed.
+        // We mine using address(0) as the yieldBuffer placeholder. The hook is
+        // deployed with address(0) first, then we call setYieldBuffer() after
+        // the buffer is deployed. This breaks the circular dependency.
         bytes memory constructorArgs = abi.encode(
             IPoolManager(poolManager),
             oracle,
-            address(0),   // placeholder - will be patched via YieldBuffer.setHook
+            address(0),   // yieldBuffer placeholder - set via setYieldBuffer() after deploy
             toxicThresh
         );
 
@@ -85,30 +84,32 @@ contract DeployAll is Script {
         console2.log("Hook address (mined):", hookAddr);
         console2.log("Salt:                ", uint256(salt));
 
-        // ── 4. Deploy YieldBuffer with the known hook address ─────────────────
-        address assetAddress = feeToken == address(0)
-            ? address(yieldRouter) // fallback to router address if no token set (will fail gracefully)
-            : feeToken;
-
-        YieldBuffer buffer = new YieldBuffer(
-            IERC20(assetAddress),
-            hookAddr,          // the mined hook address
-            msg.sender,        // authorized trigger - rotate to RSC after deployment
-            IYieldRouter(address(yieldRouter))
-        );
-        console2.log("YieldBuffer:        ", address(buffer));
-
-        // ── 5. Deploy the hook at the mined address via CREATE2 ───────────────
+        // ── 4. Deploy hook at mined address with address(0) as buffer ─────────
         VolatilityVaultHook hook = new VolatilityVaultHook{salt: salt}(
             IPoolManager(poolManager),
             oracle,
-            address(buffer),   // real buffer address now
+            address(0),   // placeholder - updated below
             toxicThresh
         );
         require(address(hook) == hookAddr, "Hook address mismatch - salt invalid");
         console2.log("VolatilityVaultHook:", address(hook));
 
-        // ── 6. Deploy LPPositionNFT ───────────────────────────────────────────
+        // ── 5. Deploy YieldBuffer with the now-known hook address ─────────────
+        address assetAddress = feeToken == address(0) ? address(yieldRouter) : feeToken;
+
+        YieldBuffer buffer = new YieldBuffer(
+            IERC20(assetAddress),
+            hookAddr,      // hook address is now known
+            msg.sender,    // authorized trigger - rotate to RSC after deployment
+            IYieldRouter(address(yieldRouter))
+        );
+        console2.log("YieldBuffer:        ", address(buffer));
+
+        // ── 6. Wire hook to buffer ────────────────────────────────────────────
+        hook.setYieldBuffer(address(buffer));
+        console2.log("Hook wired to buffer.");
+
+        // ── 7. Deploy LPPositionNFT ───────────────────────────────────────────
         LPPositionNFT nft = new LPPositionNFT(address(hook));
         console2.log("LPPositionNFT:      ", address(nft));
 

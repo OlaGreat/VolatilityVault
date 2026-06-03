@@ -46,10 +46,13 @@ contract VolatilityVaultHook is IHooks {
 
     IPoolManager public immutable poolManager;
     VRSOracle    public immutable oracle;
-    address      public immutable yieldBuffer;
+
+    /// @notice YieldBuffer address — storage (not immutable) so it can be set after
+    ///         CREATE2 deployment, breaking the circular dependency with YieldBuffer.
+    address public yieldBuffer;
+    address public hookOwner;
 
     /// @notice Minimum swap size (in absolute token units) to be flagged as toxic.
-    /// @dev Stored in contract storage (not immutable) for vm.etch compatibility in tests.
     uint256 public toxicOrderThreshold;
 
     /// @notice LP address → pool → their stated intent.
@@ -76,10 +79,12 @@ contract VolatilityVaultHook is IHooks {
     // ─────────────────────────────────────────────────────────────────────────
 
     constructor(IPoolManager _poolManager, VRSOracle _oracle, address _yieldBuffer, uint256 _toxicThreshold) {
-        poolManager = _poolManager;
-        oracle = _oracle;
-        yieldBuffer = _yieldBuffer;
+        poolManager         = _poolManager;
+        oracle              = _oracle;
+        yieldBuffer         = _yieldBuffer;
         toxicOrderThreshold = _toxicThreshold;
+        // tx.origin is the EOA signer — msg.sender would be the CREATE2 proxy during deployment.
+        hookOwner = tx.origin;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -89,6 +94,16 @@ contract VolatilityVaultHook is IHooks {
     modifier onlyPoolManager() {
         if (msg.sender != address(poolManager)) revert NotPoolManager();
         _;
+    }
+
+    modifier onlyHookOwner() {
+        require(msg.sender == hookOwner, "Not owner");
+        _;
+    }
+
+    /// @notice Set YieldBuffer after deployment (breaks circular CREATE2 dependency).
+    function setYieldBuffer(address _buffer) external onlyHookOwner {
+        yieldBuffer = _buffer;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
