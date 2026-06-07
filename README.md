@@ -323,11 +323,21 @@ Pool must be initialized with `LPFeeLibrary.DYNAMIC_FEE_FLAG` (`0x800000`).
 | Fee | Dynamic (`0x800000`) — controlled by VRS oracle |
 | Tick Spacing | 60 |
 
-### Reactive Network
+### Reactive Network (Lasna testnet, chain 5318007)
 
 | Contract | Address |
 |---|---|
-| `VolatilityRSC` | TBD |
+| `VolatilityRSC` | [`0xf2cdD5a3dE69E3E0e7f1a04Fd48F771C63b32C32`](https://lasna.reactscan.net/address/0xf2cdD5a3dE69E3E0e7f1a04Fd48F771C63b32C32) |
+
+The RSC subscribes to Uniswap V4 `Swap` events on the Sepolia PoolManager and relays VRS updates back to Sepolia via the callback receiver below.
+
+### Reactive Bridge (Sepolia)
+
+| Contract | Address |
+|---|---|
+| `VRSCallbackReceiver` | [`0x5E7CFfEA6ed4F77BECe2e77B8d2F295E8a3B0C0f`](https://sepolia.etherscan.io/address/0x5E7CFfEA6ed4F77BECe2e77B8d2F295E8a3B0C0f) |
+
+Receives Reactive Network callbacks (through the Sepolia callback proxy `0xc9f3…7bDA`) and forwards them to `VRSOracle` and `YieldBuffer`. This adapter let the core contracts stay Reactive-agnostic — no redeploy of the oracle, hook, or pool was needed.
 
 ---
 
