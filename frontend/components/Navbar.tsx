@@ -5,9 +5,10 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 const links = [
-  { href: '/',        label: 'Dashboard' },
-  { href: '/deposit', label: 'Deposit'   },
-  { href: '/buffer',  label: 'Buffer'    },
+  { href: '/',          label: 'Dashboard' },
+  { href: '/deposit',   label: 'Deposit'   },
+  { href: '/positions', label: 'Positions' },
+  { href: '/buffer',    label: 'Buffer'    },
 ]
 
 export function Navbar() {

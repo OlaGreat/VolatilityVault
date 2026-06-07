@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract } from 'wagmi'
 import { parseEther, encodeFunctionData, encodeAbiParameters, parseAbiParameters } from 'viem'
 import { CONTRACTS, ERC20_ABI } from '@/lib/contracts'
+import { savePosition } from '@/lib/positions'
+import Link from 'next/link'
 
 const PAYOUT_OPTIONS = [
   { value: 0, label: 'Daily',    desc: 'Small, frequent payouts as fees accumulate' },
@@ -52,10 +54,11 @@ export default function DepositPage() {
   const [targetAPY, setTargetAPY] = useState('12')
   const [maxIL,     setMaxIL]     = useState('5')
   const [payout,    setPayout]    = useState(0)
-  const [step,      setStep]      = useState<'idle'|'approving'|'depositing'|'done'>('idle')
+  const [step,      setStep]      = useState<'idle'|'approving'|'approved'|'depositing'|'done'>('idle')
 
-  const { writeContract, data: txHash, isPending } = useWriteContract()
+  const { writeContract, writeContractAsync, data: txHash, isPending } = useWriteContract()
   const { isSuccess } = useWaitForTransactionReceipt({ hash: txHash })
+  const [error, setError] = useState<string | null>(null)
 
   // Encode LP intent as hookData
   function buildHookData() {
@@ -65,40 +68,73 @@ export default function DepositPage() {
     )
   }
 
+  // Adding liquidity around the current 1:1 price requires BOTH tokens,
+  // so we approve both token0 and token1 to the liquidity router.
   async function handleApprove() {
+    setError(null)
     setStep('approving')
-    const amt = parseEther(amount)
-    writeContract({
-      address: CONTRACTS.TOKEN0,
-      abi: ERC20_ABI,
-      functionName: 'approve',
-      args: [CONTRACTS.LIQ_ROUTER, amt * 2n],
-    })
+    try {
+      const allowance = parseEther('1000000') // generous allowance for repeated testing
+      await writeContractAsync({
+        address: CONTRACTS.TOKEN0,
+        abi: ERC20_ABI,
+        functionName: 'approve',
+        args: [CONTRACTS.LIQ_ROUTER, allowance],
+      })
+      await writeContractAsync({
+        address: CONTRACTS.TOKEN1,
+        abi: ERC20_ABI,
+        functionName: 'approve',
+        args: [CONTRACTS.LIQ_ROUTER, allowance],
+      })
+      setStep('approved')
+    } catch (e: any) {
+      setError(e?.shortMessage ?? e?.message ?? 'Approval failed')
+      setStep('idle')
+    }
   }
 
   async function handleDeposit() {
+    setError(null)
     setStep('depositing')
-    writeContract({
-      address: CONTRACTS.LIQ_ROUTER,
-      abi: LIQ_ROUTER_ABI,
-      functionName: 'modifyLiquidity',
-      args: [
-        {
-          currency0:   CONTRACTS.TOKEN0,
-          currency1:   CONTRACTS.TOKEN1,
-          fee:         0x800000,
-          tickSpacing: 60,
-          hooks:       CONTRACTS.HOOK,
-        },
-        {
-          tickLower:      -120,
-          tickUpper:       120,
-          liquidityDelta:  parseEther(amount),
-          salt:            '0x0000000000000000000000000000000000000000000000000000000000000000',
-        },
-        buildHookData(),
-      ],
-    })
+    try {
+      const hash = await writeContractAsync({
+        address: CONTRACTS.LIQ_ROUTER,
+        abi: LIQ_ROUTER_ABI,
+        functionName: 'modifyLiquidity',
+        args: [
+          {
+            currency0:   CONTRACTS.TOKEN0,
+            currency1:   CONTRACTS.TOKEN1,
+            fee:         0x800000,
+            tickSpacing: 60,
+            hooks:       CONTRACTS.HOOK,
+          },
+          {
+            tickLower:      -120,
+            tickUpper:       120,
+            liquidityDelta:  parseEther(amount),
+            salt:            '0x0000000000000000000000000000000000000000000000000000000000000000',
+          },
+          buildHookData(),
+        ],
+      })
+      // Record the deposit locally so the user sees it on the Positions page.
+      if (address) {
+        savePosition(address, {
+          amount,
+          targetAPY,
+          maxIL,
+          payout:    PAYOUT_OPTIONS[payout].label,
+          txHash:    hash,
+          timestamp: Date.now(),
+        })
+      }
+      setStep('done')
+    } catch (e: any) {
+      setError(e?.shortMessage ?? e?.message ?? 'Deposit failed')
+      setStep('approved')
+    }
   }
 
   if (!isConnected) {
@@ -201,19 +237,25 @@ export default function DepositPage() {
       <div className="space-y-2">
         <button
           onClick={handleApprove}
-          disabled={isPending || step === 'done'}
+          disabled={isPending || step === 'approved' || step === 'done'}
           className="w-full py-3.5 rounded-xl font-semibold text-sm bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
-          {step === 'approving' && isPending ? 'Approving...' : '1. Approve Tokens'}
+          {step === 'approving' ? 'Approving both tokens...' : step === 'approved' || step === 'done' ? '✓ Tokens Approved' : '1. Approve VTKA + VTKB'}
         </button>
         <button
           onClick={handleDeposit}
-          disabled={isPending || step === 'idle' || step === 'done'}
+          disabled={isPending || step === 'idle' || step === 'approving' || step === 'done'}
           className="w-full py-3.5 rounded-xl font-semibold text-sm bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
-          {step === 'depositing' && isPending ? 'Depositing...' : '2. Add Liquidity'}
+          {step === 'depositing' ? 'Adding liquidity...' : '2. Add Liquidity'}
         </button>
       </div>
+
+      {error && (
+        <div className="bg-red-900/30 border border-red-700 rounded-xl p-3 text-center">
+          <p className="text-red-400 text-xs break-words">{error}</p>
+        </div>
+      )}
 
       {txHash && (
         <a
@@ -226,12 +268,18 @@ export default function DepositPage() {
         </a>
       )}
 
-      {isSuccess && (
+      {step === 'done' && isSuccess && (
         <div className="bg-green-900/30 border border-green-700 rounded-xl p-4 text-center">
           <p className="text-green-400 font-semibold">Position opened!</p>
-          <p className="text-gray-400 text-xs mt-1">
+          <p className="text-gray-400 text-xs mt-1 mb-3">
             Your LP intent is stored on-chain. VolatilityVault will manage your position automatically.
           </p>
+          <Link
+            href="/positions"
+            className="inline-block px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-semibold transition-colors"
+          >
+            View My Positions →
+          </Link>
         </div>
       )}
     </div>
