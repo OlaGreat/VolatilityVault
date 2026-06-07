@@ -99,9 +99,9 @@ contract VolatilityRSC is IReactive {
         0xa65f96fc951c35ead38878e0f0b7a3c744a6f5ccc1476b313353ce31712313ad;
 
     // keccak256("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)")
-    // This is the topic_0 of the Uniswap V4 PoolManager Swap event
+    // This is the topic_0 of the Uniswap V4 PoolManager Swap event (verified via cast keccak)
     uint256 public constant SWAP_TOPIC_0 =
-        0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca2d463bef2fbad;
+        0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f;
 
     uint64 internal constant GAS_LIMIT = 500_000;
 
@@ -118,10 +118,11 @@ contract VolatilityRSC is IReactive {
     address public owner;
     bool    internal isVm;  // true when running inside ReactVM (not top-level RN)
 
-    // Destination chain and contracts for callbacks
+    // Destination chain and the callback receiver adapter on that chain.
+    // Reactive calls the receiver (through the callback proxy), injecting
+    // `address sender` as the first arg; the receiver forwards to VRSOracle/YieldBuffer.
     uint256 public destinationChainId;
-    address public vrsOracle;
-    address public yieldBuffer;
+    address public callbackReceiver;
 
     // Rolling volatility state
     uint160 public lastSqrtPrice;
@@ -144,22 +145,19 @@ contract VolatilityRSC is IReactive {
 
     /// @param _originChainIds     Chain IDs to subscribe to (e.g. [11155111] for Sepolia)
     /// @param _poolManagers       PoolManager addresses on each origin chain
-    /// @param _destinationChainId Chain ID where VRSOracle lives
-    /// @param _vrsOracle          VRSOracle contract on destination chain
-    /// @param _yieldBuffer        YieldBuffer contract on destination chain
+    /// @param _destinationChainId Chain ID where the callback receiver lives
+    /// @param _callbackReceiver   VRSCallbackReceiver adapter on destination chain
     constructor(
         uint256[] memory _originChainIds,
         address[]  memory _poolManagers,
         uint256 _destinationChainId,
-        address _vrsOracle,
-        address _yieldBuffer
+        address _callbackReceiver
     ) payable {
         require(_originChainIds.length == _poolManagers.length, "length mismatch");
 
-        owner             = msg.sender;
+        owner              = msg.sender;
         destinationChainId = _destinationChainId;
-        vrsOracle         = _vrsOracle;
-        yieldBuffer       = _yieldBuffer;
+        callbackReceiver   = _callbackReceiver;
 
         // Detect whether we're inside ReactVM or on top-level Reactive Network
         uint256 size;
@@ -226,21 +224,24 @@ contract VolatilityRSC is IReactive {
 
         // Only trigger callback if VRS moved enough to matter
         if (_abs8(newVRS, currentVRS) >= MIN_VRS_DELTA) {
-            // Push new VRS to oracle on destination chain
+            // Reactive injects `address sender` (the RVM id) as the first arg of the
+            // callback; we pass address(0) as the placeholder the network fills in.
             bytes memory updatePayload = abi.encodeWithSignature(
-                "updateVRS(uint8)",
+                "updateVRS(address,uint8)",
+                address(0),
                 newVRS
             );
-            emit Callback(destinationChainId, vrsOracle, GAS_LIMIT, updatePayload);
+            emit Callback(destinationChainId, callbackReceiver, GAS_LIMIT, updatePayload);
             emit OracleUpdateTriggered(newVRS, destinationChainId);
 
             // If transitioning from storm -> calm, trigger yield buffer distribution
             bool isNowCalm = newVRS <= THRESHOLD_CALM;
             if (wasStorm && isNowCalm) {
                 bytes memory distributePayload = abi.encodeWithSignature(
-                    "triggerDistribution()"
+                    "triggerDistribution(address)",
+                    address(0)
                 );
-                emit Callback(destinationChainId, yieldBuffer, GAS_LIMIT, distributePayload);
+                emit Callback(destinationChainId, callbackReceiver, GAS_LIMIT, distributePayload);
                 emit BufferDistributionTriggered(destinationChainId);
             }
 
@@ -309,8 +310,7 @@ contract VolatilityRSC is IReactive {
         SERVICE.unsubscribe(chainId, poolManager, SWAP_TOPIC_0, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
     }
 
-    function setVrsOracle(address _oracle) external onlyOwner { vrsOracle = _oracle; }
-    function setYieldBuffer(address _buffer) external onlyOwner { yieldBuffer = _buffer; }
+    function setCallbackReceiver(address _receiver) external onlyOwner { callbackReceiver = _receiver; }
     function setDestinationChain(uint256 _chainId) external onlyOwner { destinationChainId = _chainId; }
     function transferOwnership(address _newOwner) external onlyOwner { owner = _newOwner; }
 
