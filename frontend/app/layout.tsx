@@ -13,13 +13,27 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className={`${inter.className} bg-gray-950 text-white min-h-screen`}>
+    <html lang="en" className="dark">
+      <head>
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
+        />
+      </head>
+      <body
+        className={inter.className}
+        style={{ backgroundColor: '#050814', color: '#f1f5f9', minHeight: '100vh', overflowX: 'hidden' }}
+      >
         <Providers>
           <Navbar />
-          <main className="max-w-5xl mx-auto px-4 py-8">
+          {/*
+            No global max-width or padding here.
+            - Dashboard (/) manages its own sidebar + full-width layout.
+            - Deposit / Positions / Buffer each use their own max-w containers.
+          */}
+          <div className="w-full">
             {children}
-          </main>
+          </div>
         </Providers>
       </body>
     </html>
