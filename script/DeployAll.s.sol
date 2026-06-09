@@ -38,17 +38,19 @@ contract DeployAll is Script {
     // CREATE2 Deployer Proxy - standard across all EVM chains
     address constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
-    // Hook permission bits
+    // Hook permission bits (includes afterSwapReturnDelta for buffer fee-taking)
     uint160 constant HOOK_FLAGS = uint160(
-        Hooks.AFTER_ADD_LIQUIDITY_FLAG    |
-        Hooks.AFTER_REMOVE_LIQUIDITY_FLAG |
-        Hooks.BEFORE_SWAP_FLAG            |
-        Hooks.AFTER_SWAP_FLAG
+        Hooks.AFTER_ADD_LIQUIDITY_FLAG       |
+        Hooks.AFTER_REMOVE_LIQUIDITY_FLAG    |
+        Hooks.BEFORE_SWAP_FLAG               |
+        Hooks.AFTER_SWAP_FLAG                |
+        Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
     );
 
     function run() external {
         address poolManager  = vm.envAddress("POOL_MANAGER");
-        address feeToken     = vm.envOr("FEE_TOKEN", address(0));
+        address token0       = vm.envAddress("TOKEN0");
+        address token1       = vm.envAddress("TOKEN1");
         uint256 toxicThresh  = vm.envOr("TOXIC_THRESHOLD", uint256(1_000 ether));
 
         vm.startBroadcast();
@@ -94,13 +96,12 @@ contract DeployAll is Script {
         require(address(hook) == hookAddr, "Hook address mismatch - salt invalid");
         console2.log("VolatilityVaultHook:", address(hook));
 
-        // ── 5. Deploy YieldBuffer with the now-known hook address ─────────────
-        address assetAddress = feeToken == address(0) ? address(yieldRouter) : feeToken;
-
+        // ── 5. Deploy dual-asset YieldBuffer with the now-known hook address ──
         YieldBuffer buffer = new YieldBuffer(
-            IERC20(assetAddress),
+            IERC20(token0),
+            IERC20(token1),
             hookAddr,      // hook address is now known
-            msg.sender,    // authorized trigger - rotate to RSC after deployment
+            msg.sender,    // authorized trigger - rotate to RSC receiver after deployment
             IYieldRouter(address(yieldRouter))
         );
         console2.log("YieldBuffer:        ", address(buffer));

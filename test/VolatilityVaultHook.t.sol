@@ -48,8 +48,9 @@ contract VolatilityVaultHookTest is Test {
     // AFTER_REMOVE_LIQUIDITY_FLAG = 1 << 8  = 0x0100
     // BEFORE_SWAP_FLAG          = 1 << 7  = 0x0080
     // AFTER_SWAP_FLAG           = 1 << 6  = 0x0040
-    // Combined                           = 0x05C0
-    uint160 constant HOOK_FLAGS       = 0x05C0;
+    // AFTER_SWAP_RETURNS_DELTA  = 1 << 2  = 0x0004
+    // Combined                           = 0x05C4
+    uint160 constant HOOK_FLAGS       = 0x05C4;
     uint160 constant CLEAR_ALL_MASK   = ~uint160(0) << 14;
 
     // Canonical sqrtPrice for a 1:1 pool
@@ -112,9 +113,10 @@ contract VolatilityVaultHookTest is Test {
         oracle      = new VRSOracle(address(this));
         yieldRouter = new MockYieldRouter();
 
-        // YieldBuffer receives token0 as the fee token (simplification for tests)
+        // Dual-asset YieldBuffer (token0 + token1)
         buffer = new YieldBuffer(
             IERC20(address(token0)),
+            IERC20(address(token1)),
             hookAddr,
             address(this),
             IYieldRouter(address(yieldRouter))
@@ -239,7 +241,9 @@ contract VolatilityVaultHookTest is Test {
     // ─────────────────────────────────────────────────────────────────────────
 
     function test_afterAddLiquidity_registersIntent() public {
+        // hookData carries the LP address explicitly (V4 `sender` is the router, not the user).
         bytes memory hookData = abi.encode(
+            lp,
             uint256(1200),                             // targetAPY = 12%
             uint256(500),                              // maxILToleranceBps = 5%
             VolatilityVaultHook.PayoutPreference.DAILY
@@ -251,40 +255,40 @@ contract VolatilityVaultHookTest is Test {
             hookData
         );
 
-        // In V4, afterAddLiquidity's `sender` = the address that called manager.modifyLiquidity()
-        // which is address(liquidityRouter) (PoolModifyLiquidityTest's unlockCallback).
         (
             uint256 targetAPY,
             uint256 maxIL,
             VolatilityVaultHook.PayoutPreference pref,
             uint256 depositTs,
             bool registered
-        ) = hook.lpIntents(address(liquidityRouter), poolKey.toId());
+        ) = hook.lpIntents(lp, poolKey.toId());
 
         assertTrue(registered);
         assertEq(targetAPY, 1200);
         assertEq(maxIL, 500);
         assertEq(uint8(pref), uint8(VolatilityVaultHook.PayoutPreference.DAILY));
         assertGt(depositTs, 0);
+
+        // LP is also registered in the buffer for the current epoch.
+        assertEq(buffer.lpLiquidity(lp, buffer.currentEpoch()), 10e18);
     }
 
     function test_afterAddLiquidity_noHookData_noIntent() public {
-        // Add liquidity with no hookData — intent should NOT be registered
         liquidityRouter.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 10e18, salt: 0}),
             ""
         );
 
-        (,,,, bool registered) = hook.lpIntents(address(this), poolKey.toId());
+        (,,,, bool registered) = hook.lpIntents(lp, poolKey.toId());
         assertFalse(registered);
     }
 
     function test_afterAddLiquidity_emitsLPRegistered() public {
-        bytes memory hookData = abi.encode(uint256(1000), uint256(300), VolatilityVaultHook.PayoutPreference.REINVEST);
+        bytes memory hookData = abi.encode(lp, uint256(1000), uint256(300), VolatilityVaultHook.PayoutPreference.REINVEST);
 
         vm.expectEmit(true, true, false, false);
-        emit VolatilityVaultHook.LPRegistered(poolKey.toId(), address(liquidityRouter), 1000, VolatilityVaultHook.PayoutPreference.REINVEST);
+        emit VolatilityVaultHook.LPRegistered(poolKey.toId(), lp, 1000, VolatilityVaultHook.PayoutPreference.REINVEST);
 
         liquidityRouter.modifyLiquidity(
             poolKey,
@@ -298,31 +302,30 @@ contract VolatilityVaultHookTest is Test {
     // ─────────────────────────────────────────────────────────────────────────
 
     function test_afterRemoveLiquidity_clearsIntent() public {
-        bytes memory hookData = abi.encode(uint256(1200), uint256(500), VolatilityVaultHook.PayoutPreference.DAILY);
+        bytes memory hookData = abi.encode(lp, uint256(1200), uint256(500), VolatilityVaultHook.PayoutPreference.DAILY);
 
-        // Add liquidity with intent
         liquidityRouter.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 10e18, salt: 0}),
             hookData
         );
 
-        (,,,, bool registeredBefore) = hook.lpIntents(address(liquidityRouter), poolKey.toId());
+        (,,,, bool registeredBefore) = hook.lpIntents(lp, poolKey.toId());
         assertTrue(registeredBefore);
 
-        // Remove liquidity
+        // Remove liquidity — pass the LP address in hookData
         liquidityRouter.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: -10e18, salt: 0}),
-            ""
+            abi.encode(lp)
         );
 
-        (,,,, bool registeredAfter) = hook.lpIntents(address(liquidityRouter), poolKey.toId());
+        (,,,, bool registeredAfter) = hook.lpIntents(lp, poolKey.toId());
         assertFalse(registeredAfter);
     }
 
     function test_afterRemoveLiquidity_emitsLPExited() public {
-        bytes memory hookData = abi.encode(uint256(1200), uint256(500), VolatilityVaultHook.PayoutPreference.LUMP_SUM);
+        bytes memory hookData = abi.encode(lp, uint256(1200), uint256(500), VolatilityVaultHook.PayoutPreference.LUMP_SUM);
 
         liquidityRouter.modifyLiquidity(
             poolKey,
@@ -331,12 +334,12 @@ contract VolatilityVaultHookTest is Test {
         );
 
         vm.expectEmit(true, true, false, false);
-        emit VolatilityVaultHook.LPExited(poolKey.toId(), address(liquidityRouter), block.timestamp);
+        emit VolatilityVaultHook.LPExited(poolKey.toId(), lp, block.timestamp);
 
         liquidityRouter.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: -10e18, salt: 0}),
-            ""
+            abi.encode(lp)
         );
     }
 
@@ -435,6 +438,45 @@ contract VolatilityVaultHookTest is Test {
         emit VolatilityVaultHook.FeeOverridden(poolKey.toId(), 75, 3000);
 
         _swap(-1_000e18, true);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // END-TO-END: deposit → swap accrues buffer fees → distribute → LP claims
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_endToEnd_depositSwapClaim() public {
+        // 1. LP deposits with intent — registers them in the buffer
+        bytes memory hookData = abi.encode(lp, uint256(1200), uint256(500), VolatilityVaultHook.PayoutPreference.DAILY);
+        liquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1_000e18, salt: 0}),
+            hookData
+        );
+        assertEq(buffer.lpLiquidity(lp, 0), 1_000e18, "LP registered in buffer");
+
+        // 2. Storm hits → a swap routes a buffer fee in via afterSwap
+        oracle.updateVRS(85); // HURRICANE → max buffer fee
+        _swap(-10_000e18, true);
+
+        (uint256 f0, uint256 f1,,,,,,,) = buffer.epochs(0);
+        assertTrue(f0 > 0 || f1 > 0, "buffer fees accrued from swap");
+
+        // 3. Storm passes → distribution closes the epoch (test contract is the trigger)
+        buffer.triggerDistribution();
+
+        // 4. LP claims their share (they own 100% of registered buffer liquidity)
+        (uint256 p0, uint256 p1) = buffer.previewClaim(lp, 0);
+        assertTrue(p0 > 0 || p1 > 0, "LP has something to claim");
+
+        uint256 before0 = token0.balanceOf(lp);
+        uint256 before1 = token1.balanceOf(lp);
+        vm.prank(lp);
+        buffer.claim(0);
+
+        assertEq(token0.balanceOf(lp) - before0, p0, "claimed token0");
+        assertEq(token1.balanceOf(lp) - before1, p1, "claimed token1");
+        assertEq(p0, f0, "single LP gets all token0 fees");
+        assertEq(p1, f1, "single LP gets all token1 fees");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

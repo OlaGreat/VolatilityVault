@@ -10,7 +10,16 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/type
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {VRSOracle} from "./VRSOracle.sol";
+
+/// @notice Minimal interface to the dual-asset YieldBuffer.
+interface IYieldBuffer {
+    function registerLP(address lp, uint256 liquidity, uint8 payout) external;
+    function recordFees(uint256 amount0, uint256 amount1) external;
+    function deregisterLP(address lp, uint256 liquidity) external;
+}
 
 /// @title VolatilityVaultHook
 /// @notice Uniswap V4 hook that:
@@ -25,6 +34,13 @@ import {VRSOracle} from "./VRSOracle.sol";
 contract VolatilityVaultHook is IHooks {
     using PoolIdLibrary for PoolKey;
     using LPFeeLibrary for uint24;
+    using SafeCast for uint256;
+
+    /// @notice Buffer fee taken on each swap, scaling with VRS (basis points of the
+    ///         unspecified-token swap amount). 10 bps (calm) → 100 bps (hurricane).
+    uint256 public constant BUFFER_FEE_MIN_BIPS = 10;
+    uint256 public constant BUFFER_FEE_MAX_BONUS = 90;
+    uint256 public constant TOTAL_BIPS = 10_000;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Types
@@ -110,12 +126,13 @@ contract VolatilityVaultHook is IHooks {
     // Hook permissions — encodes which callbacks this hook uses.
     // The hook address MUST have matching lower bits (use HookMiner).
     //
-    //   AFTER_ADD_LIQUIDITY_FLAG      = 1 << 10 = 0x0400
-    //   AFTER_REMOVE_LIQUIDITY_FLAG   = 1 << 8  = 0x0100
-    //   BEFORE_SWAP_FLAG              = 1 << 7  = 0x0080
-    //   AFTER_SWAP_FLAG               = 1 << 6  = 0x0040
+    //   AFTER_ADD_LIQUIDITY_FLAG       = 1 << 10 = 0x0400
+    //   AFTER_REMOVE_LIQUIDITY_FLAG    = 1 << 8  = 0x0100
+    //   BEFORE_SWAP_FLAG               = 1 << 7  = 0x0080
+    //   AFTER_SWAP_FLAG                = 1 << 6  = 0x0040
+    //   AFTER_SWAP_RETURNS_DELTA_FLAG  = 1 << 2  = 0x0004
     //
-    //   Required address suffix: 0x05C0
+    //   Required address suffix: 0x05C4
     // ─────────────────────────────────────────────────────────────────────────
 
     function getHookPermissions() public pure returns (Hooks.Permissions memory) {
@@ -131,7 +148,7 @@ contract VolatilityVaultHook is IHooks {
             beforeDonate:                   false,
             afterDonate:                    false,
             beforeSwapReturnDelta:          false,
-            afterSwapReturnDelta:           false,
+            afterSwapReturnDelta:           true,
             afterAddLiquidityReturnDelta:   false,
             afterRemoveLiquidityReturnDelta: false
         });
@@ -174,34 +191,64 @@ contract VolatilityVaultHook is IHooks {
         );
     }
 
-    /// @notice After swap: placeholder for storm-fee routing to YieldBuffer.
-    ///         Phase 2 will add delta-return logic to take a surcharge here.
+    /// @notice Takes a VRS-scaled buffer fee in the swap's unspecified token and routes
+    ///         it into the YieldBuffer. The fee scales with volatility — calm swaps pay
+    ///         ~10 bps, hurricane swaps pay ~100 bps — so storm fees accumulate for LPs.
+    /// @dev Requires the afterSwapReturnDelta permission. The returned int128 is the
+    ///      hook's delta in the unspecified currency (positive = hook took that amount).
     function afterSwap(
         address,
-        PoolKey calldata,
-        SwapParams calldata,
-        BalanceDelta,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
         bytes calldata
-    ) external view override onlyPoolManager returns (bytes4, int128) {
-        return (IHooks.afterSwap.selector, 0);
+    ) external override onlyPoolManager returns (bytes4, int128) {
+        uint256 vrs = oracle.vrs();
+        uint256 bufferBips = BUFFER_FEE_MIN_BIPS + (vrs * BUFFER_FEE_MAX_BONUS) / 100;
+
+        // The fee is taken in the swap's unspecified token (matches V4 fee-taking pattern).
+        bool specifiedTokenIs0 = (params.amountSpecified < 0 == params.zeroForOne);
+        (Currency feeCurrency, int128 swapAmount) =
+            specifiedTokenIs0 ? (key.currency1, delta.amount1()) : (key.currency0, delta.amount0());
+        if (swapAmount < 0) swapAmount = -swapAmount;
+
+        uint256 feeAmount = (uint256(uint128(swapAmount)) * bufferBips) / TOTAL_BIPS;
+        if (feeAmount == 0 || yieldBuffer == address(0)) {
+            return (IHooks.afterSwap.selector, 0);
+        }
+
+        // Pull the fee from the PoolManager directly into the buffer.
+        poolManager.take(feeCurrency, yieldBuffer, feeAmount);
+
+        // Record which token the fee landed in.
+        if (Currency.unwrap(feeCurrency) == Currency.unwrap(key.currency0)) {
+            IYieldBuffer(yieldBuffer).recordFees(feeAmount, 0);
+        } else {
+            IYieldBuffer(yieldBuffer).recordFees(0, feeAmount);
+        }
+
+        return (IHooks.afterSwap.selector, feeAmount.toInt128());
     }
 
-    /// @notice Registers the LP's yield intent when they add liquidity.
-    ///         hookData must be abi.encoded LPIntent fields: (targetAPY, maxILToleranceBps, PayoutPreference).
+    /// @notice Registers the LP's yield intent and buffer share when they add liquidity.
+    /// @dev hookData is abi.encoded (address lp, uint256 targetAPY, uint256 maxILBps, PayoutPreference).
+    ///      The LP address is passed explicitly because in V4 the `sender` here is the
+    ///      liquidity router, not the end user. (A production PositionManager would mint
+    ///      an LPPositionNFT instead of trusting hookData.)
     function afterAddLiquidity(
-        address sender,
+        address,
         PoolKey calldata key,
-        ModifyLiquidityParams calldata,
+        ModifyLiquidityParams calldata params,
         BalanceDelta,
         BalanceDelta,
         bytes calldata hookData
     ) external override onlyPoolManager returns (bytes4, BalanceDelta) {
         if (hookData.length > 0) {
-            (uint256 targetAPY, uint256 maxILBps, PayoutPreference pref) =
-                abi.decode(hookData, (uint256, uint256, PayoutPreference));
+            (address lp, uint256 targetAPY, uint256 maxILBps, PayoutPreference pref) =
+                abi.decode(hookData, (address, uint256, uint256, PayoutPreference));
 
             PoolId poolId = key.toId();
-            lpIntents[sender][poolId] = LPIntent({
+            lpIntents[lp][poolId] = LPIntent({
                 targetAPY:         targetAPY,
                 maxILToleranceBps: maxILBps,
                 payout:            pref,
@@ -209,26 +256,40 @@ contract VolatilityVaultHook is IHooks {
                 registered:        true
             });
 
-            emit LPRegistered(poolId, sender, targetAPY, pref);
+            emit LPRegistered(poolId, lp, targetAPY, pref);
+
+            // Register the LP's share in the buffer so they can claim storm fees.
+            if (yieldBuffer != address(0) && params.liquidityDelta > 0) {
+                IYieldBuffer(yieldBuffer).registerLP(lp, uint256(params.liquidityDelta), uint8(pref));
+            }
         }
 
         return (IHooks.afterAddLiquidity.selector, BalanceDelta.wrap(0));
     }
 
-    /// @notice Clears the LP's intent and emits an exit event for YieldBuffer payout.
+    /// @notice Clears the LP's intent and deregisters them from the buffer on exit.
+    /// @dev hookData (when present) is abi.encoded (address lp, ...) — same as deposit —
+    ///      because the V4 `sender` here is the router, not the end user.
     function afterRemoveLiquidity(
-        address sender,
+        address,
         PoolKey calldata key,
-        ModifyLiquidityParams calldata,
+        ModifyLiquidityParams calldata params,
         BalanceDelta,
         BalanceDelta,
-        bytes calldata
+        bytes calldata hookData
     ) external override onlyPoolManager returns (bytes4, BalanceDelta) {
-        PoolId poolId = key.toId();
+        if (hookData.length > 0) {
+            (address lp) = abi.decode(hookData, (address));
+            PoolId poolId = key.toId();
 
-        if (lpIntents[sender][poolId].registered) {
-            emit LPExited(poolId, sender, block.timestamp);
-            delete lpIntents[sender][poolId];
+            if (lpIntents[lp][poolId].registered) {
+                emit LPExited(poolId, lp, block.timestamp);
+                delete lpIntents[lp][poolId];
+            }
+
+            if (yieldBuffer != address(0) && params.liquidityDelta < 0) {
+                IYieldBuffer(yieldBuffer).deregisterLP(lp, uint256(-params.liquidityDelta));
+            }
         }
 
         return (IHooks.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
