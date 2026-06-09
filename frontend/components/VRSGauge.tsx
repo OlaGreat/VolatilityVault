@@ -27,7 +27,7 @@ export function VRSGauge() {
     score === null  ? '#64748b' :
     score <= 30     ? '#10b981' :   // emerald — CALM
     score <= 60     ? '#eab308' :   // yellow  — CLOUDY
-    score <= 80     ? '#38bdf8' :   // sky     — STORM
+    score <= 80     ? '#f97316' :   // orange  — STORM
                       '#ef4444'     // red     — HURRICANE
 
   // Risk environment label
@@ -42,14 +42,14 @@ export function VRSGauge() {
     score === null  ? 'rgba(100,116,139,0.1)' :
     score <= 30     ? 'rgba(16,185,129,0.1)'  :
     score <= 60     ? 'rgba(234,179,8,0.1)'   :
-    score <= 80     ? 'rgba(56,189,248,0.1)'  :
+    score <= 80     ? 'rgba(249,115,22,0.1)'  :
                       'rgba(239,68,68,0.1)'
 
   const envBorder =
     score === null  ? 'rgba(100,116,139,0.3)' :
     score <= 30     ? 'rgba(16,185,129,0.3)'  :
     score <= 60     ? 'rgba(234,179,8,0.3)'   :
-    score <= 80     ? 'rgba(56,189,248,0.3)'  :
+    score <= 80     ? 'rgba(249,115,22,0.3)'  :
                       'rgba(239,68,68,0.3)'
 
   return (
@@ -150,8 +150,8 @@ export function VRSGauge() {
         {[
           { label: '01 / Calm',     bar: 'rgba(16,185,129,0.4)',  active: score !== null && score <= 30  },
           { label: '02 / Cloudy',   bar: 'rgba(234,179,8,0.4)',   active: score !== null && score > 30 && score <= 60 },
-          { label: '03 / Storm',    bar: 'rgba(56,189,248,0.8)',  active: score !== null && score > 60 && score <= 80 },
-          { label: '04 / Critical', bar: 'rgba(239,68,68,0.4)',   active: score !== null && score > 80  },
+          { label: '03 / Storm',     bar: 'rgba(249,115,22,0.8)', active: score !== null && score > 60 && score <= 80 },
+          { label: '04 / Hurricane', bar: 'rgba(239,68,68,0.6)',  active: score !== null && score > 80  },
         ].map(tier => (
           <div key={tier.label} className="space-y-1.5 sm:space-y-2">
             <div className="h-1 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(255,255,255,0.05)' }}>

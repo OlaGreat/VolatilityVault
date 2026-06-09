@@ -12,7 +12,7 @@ const MS: React.CSSProperties = {
 }
 
 const nav = [
-  { href: '/',          icon: 'grid_view',              label: 'Dashboard'  },
+  { href: '/dashboard', icon: 'grid_view',              label: 'Dashboard'  },
   { href: '/deposit',   icon: 'account_balance_wallet', label: 'Deposit'    },
   { href: '/positions', icon: 'query_stats',            label: 'Positions'  },
   { href: '/buffer',    icon: 'shield',                 label: 'Buffer'     },

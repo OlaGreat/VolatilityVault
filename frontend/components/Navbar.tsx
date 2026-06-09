@@ -4,16 +4,12 @@ import { ConnectButton } from '@rainbow-me/rainbowkit'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-const links = [
-  { href: '/',          label: 'Dashboard' },
-  { href: '/deposit',   label: 'Deposit'   },
-  { href: '/positions', label: 'Positions' },
-  { href: '/buffer',    label: 'Buffer'    },
-]
-
 export function Navbar() {
   const pathname = usePathname()
-  const isHome = pathname === '/home'
+
+  // The landing page ('/') has its own self-contained header, so hide the
+  // global Navbar there to avoid a double header.
+  if (pathname === '/') return null
 
   return (
     <nav
@@ -22,27 +18,10 @@ export function Navbar() {
     >
       {/* Left: logo + nav links (links only on home) */}
       <div className="flex items-center gap-6 lg:gap-8">
+        {/* Logo returns to the landing page */}
         <Link href="/" className="text-lg sm:text-xl font-bold tracking-tight text-white whitespace-nowrap">
           VolatilityVault
         </Link>
-
-        {/* Nav links — only rendered on home page, no active/underline styling */}
-        {isHome && (
-          <div className="hidden md:flex items-center gap-1">
-            {links.map(l => (
-              <Link
-                key={l.href}
-                href={l.href}
-                className="px-3 py-1.5 text-[13px] font-medium uppercase tracking-widest transition-colors"
-                style={{ color: '#94a3b8' }}
-                onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = '#fff')}
-                onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = '#94a3b8')}
-              >
-                {l.label}
-              </Link>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Right: network badge + wallet */}
