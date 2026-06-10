@@ -1,9 +1,9 @@
 // Live Sepolia contract addresses
 export const CONTRACTS = {
   VRS_ORACLE:   '0x172c86F5b964d7836Cf055A76f5Ad316f0297198' as `0x${string}`,
-  HOOK:         '0x63Ce6162Af038c903fc21ECBE090A690eD5b85C0' as `0x${string}`,
-  YIELD_BUFFER: '0x2704187fbE9a0617312B5Eb7399508E760821BBc' as `0x${string}`,
-  LP_NFT:       '0xb7d9Cf1BC3Aed3FAc9BbcF8d8Eb0BE94fb7462Cb' as `0x${string}`,
+  HOOK:         '0xFdae4277A87a223D198a13C5DB639f3731cf85c4' as `0x${string}`,
+  YIELD_BUFFER: '0x29496484A51d6682b325AA78a7fA4Cf32170afe1' as `0x${string}`,
+  LP_NFT:       '0x2662e94AD1Eb77F265b179866e89C7Bc7aA34c60' as `0x${string}`,
   POOL_MANAGER: '0xe03A1074c86CFEdd5C142C4F04F1a1536E203543' as `0x${string}`,
   // Uniswap V4 test routers (deployed by Uniswap on Sepolia)
   SWAP_ROUTER:  '0x9b6b46e2c869aa39918db7f52f5557fe577b6eee' as `0x${string}`,
@@ -38,13 +38,15 @@ export const YIELD_BUFFER_ABI = [
   { name: 'epochs',        type: 'function', stateMutability: 'view',
     inputs: [{ name: '', type: 'uint256' }],
     outputs: [
-      { name: 'totalFees',        type: 'uint256' },
-      { name: 'totalYieldEarned', type: 'uint256' },
-      { name: 'totalLiquidity',   type: 'uint256' },
-      { name: 'distributedAt',    type: 'uint256' },
-      { name: 'isActive',         type: 'bool' },
-      { name: 'isDistributed',    type: 'bool' },
-      { name: 'isDeployed',       type: 'bool' },
+      { name: 'totalFees0',     type: 'uint256' },
+      { name: 'totalFees1',     type: 'uint256' },
+      { name: 'totalYield0',    type: 'uint256' },
+      { name: 'totalYield1',    type: 'uint256' },
+      { name: 'totalLiquidity', type: 'uint256' },
+      { name: 'distributedAt',  type: 'uint256' },
+      { name: 'isActive',       type: 'bool' },
+      { name: 'isDistributed',  type: 'bool' },
+      { name: 'isDeployed',     type: 'bool' },
     ]
   },
   { name: 'lpLiquidity',   type: 'function', stateMutability: 'view',
@@ -53,7 +55,7 @@ export const YIELD_BUFFER_ABI = [
   },
   { name: 'previewClaim',  type: 'function', stateMutability: 'view',
     inputs: [{ name: 'lp', type: 'address' }, { name: 'epochId', type: 'uint256' }],
-    outputs: [{ type: 'uint256' }]
+    outputs: [{ name: 'share0', type: 'uint256' }, { name: 'share1', type: 'uint256' }]
   },
   { name: 'claim',         type: 'function', stateMutability: 'nonpayable',
     inputs: [{ name: 'epochId', type: 'uint256' }], outputs: []

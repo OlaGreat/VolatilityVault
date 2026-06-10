@@ -77,11 +77,12 @@ export default function DepositPage() {
   const { writeContractAsync, data: txHash, isPending } = useWriteContract()
   const { isSuccess } = useWaitForTransactionReceipt({ hash: txHash })
 
-  // ── All original logic preserved exactly ──
+  // hookData carries the LP address explicitly — in V4 the hook's `sender` is the
+  // liquidity router, so the hook reads the real LP from here to register them in the buffer.
   function buildHookData() {
     return encodeAbiParameters(
-      parseAbiParameters('uint256 targetAPY, uint256 maxILBps, uint8 payout'),
-      [BigInt(Number(targetAPY) * 100), BigInt(Number(maxIL) * 100), payout]
+      parseAbiParameters('address lp, uint256 targetAPY, uint256 maxILBps, uint8 payout'),
+      [address as `0x${string}`, BigInt(Number(targetAPY) * 100), BigInt(Number(maxIL) * 100), payout]
     )
   }
 

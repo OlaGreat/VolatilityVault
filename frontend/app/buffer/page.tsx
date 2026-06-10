@@ -37,27 +37,29 @@ export default function BufferPage() {
     address: CONTRACTS.YIELD_BUFFER, abi: YIELD_BUFFER_ABI,
     functionName: 'previewClaim',
     args: address && currentEpoch !== undefined ? [address, currentEpoch > 0n ? currentEpoch - 1n : 0n] : undefined,
-    query: { enabled: !!address && currentEpoch !== undefined },
+    query: { enabled: !!address && currentEpoch !== undefined, refetchInterval: 6000 },
   })
   const { data: lpShare } = useReadContract({
     address: CONTRACTS.YIELD_BUFFER, abi: YIELD_BUFFER_ABI,
     functionName: 'lpLiquidity',
     args: address && currentEpoch !== undefined ? [address, currentEpoch] : undefined,
-    query: { enabled: !!address && currentEpoch !== undefined },
+    query: { enabled: !!address && currentEpoch !== undefined, refetchInterval: 6000 },
   })
 
   const { writeContract, data: claimHash, isPending } = useWriteContract()
   const { isSuccess } = useWaitForTransactionReceipt({ hash: claimHash })
 
-  // ── All original derived values preserved exactly ──
+  // ── Dual-asset epoch layout: [fees0, fees1, yield0, yield1, totalLiquidity,
+  //    distributedAt, isActive, isDistributed, isDeployed] ──
   const epoch     = currentEpoch !== undefined ? Number(currentEpoch) : null
-  const fees      = epochData ? formatEther(epochData[0] as bigint) : '0'
-  const yield_    = epochData ? formatEther(epochData[1] as bigint) : '0'
-  const totalLiq  = epochData ? formatEther(epochData[2] as bigint) : '0'
-  const isActive  = epochData ? Boolean(epochData[4]) : false
-  const isDeployed = epochData ? Boolean(epochData[6]) : false
+  const fees      = epochData ? formatEther((epochData[0] as bigint) + (epochData[1] as bigint)) : '0'
+  const yield_    = epochData ? formatEther((epochData[2] as bigint) + (epochData[3] as bigint)) : '0'
+  const totalLiq  = epochData ? formatEther(epochData[4] as bigint) : '0'
+  const isActive  = epochData ? Boolean(epochData[6]) : false
+  const isDeployed = epochData ? Boolean(epochData[8]) : false
   const myShare   = lpShare   ? formatEther(lpShare as bigint) : '0'
-  const myClaim   = claimable ? formatEther(claimable as bigint) : '0'
+  // previewClaim returns (share0, share1) — combine both tokens for the display total
+  const myClaim   = claimable ? formatEther((claimable as readonly bigint[])[0] + (claimable as readonly bigint[])[1]) : '0'
 
   // ── Original claim handler preserved exactly ──
   function handleClaim() {
@@ -253,7 +255,7 @@ export default function BufferPage() {
                   {/* Claim button */}
                   <button
                     onClick={handleClaim}
-                    disabled={!isConnected || isPending || parseFloat(myClaim) === 0 || !currentEpoch || currentEpoch === 0n}
+                    disabled={!isConnected || isPending || isSuccess || parseFloat(myClaim) === 0 || !currentEpoch || currentEpoch === 0n}
                     className="w-full py-3.5 rounded-sm font-bold text-[13px] uppercase tracking-wider transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
                     style={{ background: '#38bdf8', color: '#050814', letterSpacing: '0.12em' }}
                     onMouseEnter={e => { if (!e.currentTarget.disabled) e.currentTarget.style.opacity = '0.85' }}

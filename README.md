@@ -80,7 +80,7 @@ Inspired by [Angstrom](https://www.paradigm.xyz/2024/04/angstrom), the hook also
 
 Fees collected during storm periods do not get distributed immediately. Instant fee distribution creates JIT (just-in-time) liquidity attacks — bots deposit right before a large swap, collect fees, and withdraw immediately after.
 
-Instead, storm fees flow into `YieldBuffer.sol` — an ERC-4626 vault. An AI agent automatically deploys the buffer to the highest-yielding protocol available:
+Instead, storm fees flow into `YieldBuffer.sol` — a dual-asset buffer (tracks both pool tokens). An AI agent automatically deploys the buffer to the highest-yielding protocol available:
 
 ```
 YieldBuffer checks lending rates every N blocks:
@@ -148,7 +148,7 @@ struct LPIntent {
 │                   │                                                     │
 │                   │ storm fees                                          │
 │                   ▼                                                     │
-│  YieldBuffer.sol (ERC-4626)                                            │
+│  YieldBuffer.sol (dual-asset)                                            │
 │  - Holds storm-period fees, earns yield on Aave / Morpho              │
 │  - Distributes to LPs on Reactive trigger (fees + yield earned)       │
 │  - Respects each LP's PayoutPreference                                 │
@@ -208,7 +208,7 @@ VolatilityVault/
 ├── src/
 │   ├── VolatilityVaultHook.sol    # Core V4 hook — dynamic fee, toxic detection, LP intent
 │   ├── VRSOracle.sol              # Stores VRS score, maps to fee tiers
-│   ├── YieldBuffer.sol            # ERC-4626 vault — storm fees + yield routing
+│   ├── YieldBuffer.sol            # Dual-asset buffer — storm fees (both tokens) + yield routing
 │   ├── LPPositionNFT.sol          # ERC-721 — minted on deposit, stores LPIntent
 │   └── mocks/
 │       ├── MockRSC.sol            # Simulates Reactive RSC for local testing
@@ -218,7 +218,7 @@ VolatilityVault/
 ├── test/
 │   ├── VRSOracle.t.sol            # 17 tests — score updates, fee tiers, access control, fuzz
 │   ├── VolatilityVaultHook.t.sol  # Fee override, toxic detection, LP intent registration
-│   ├── YieldBuffer.t.sol          # ERC-4626 compliance, yield routing, distribution
+│   ├── YieldBuffer.t.sol          # Dual-asset accrual, yield routing, distribution, claims
 │   └── Integration.t.sol          # End-to-end: oracle → hook → buffer → LP payout
 ├── script/
 │   ├── DeployHook.s.sol           # Mines CREATE2 salt, deploys hook to correct address
@@ -307,9 +307,9 @@ Pool must be initialized with `LPFeeLibrary.DYNAMIC_FEE_FLAG` (`0x800000`).
 | Contract | Address |
 |---|---|
 | `VRSOracle` | [`0x172c86F5b964d7836Cf055A76f5Ad316f0297198`](https://sepolia.etherscan.io/address/0x172c86F5b964d7836Cf055A76f5Ad316f0297198) |
-| `VolatilityVaultHook` | [`0x63Ce6162Af038c903fc21ECBE090A690eD5b85C0`](https://sepolia.etherscan.io/address/0x63Ce6162Af038c903fc21ECBE090A690eD5b85C0) |
-| `YieldBuffer` | [`0x2704187fbE9a0617312B5Eb7399508E760821BBc`](https://sepolia.etherscan.io/address/0x2704187fbE9a0617312B5Eb7399508E760821BBc) |
-| `LPPositionNFT` | [`0xb7d9Cf1BC3Aed3FAc9BbcF8d8Eb0BE94fb7462Cb`](https://sepolia.etherscan.io/address/0xb7d9Cf1BC3Aed3FAc9BbcF8d8Eb0BE94fb7462Cb) |
+| `VolatilityVaultHook` | [`0xFdae4277A87a223D198a13C5DB639f3731cf85c4`](https://sepolia.etherscan.io/address/0xFdae4277A87a223D198a13C5DB639f3731cf85c4) |
+| `YieldBuffer` | [`0x29496484A51d6682b325AA78a7fA4Cf32170afe1`](https://sepolia.etherscan.io/address/0x29496484A51d6682b325AA78a7fA4Cf32170afe1) |
+| `LPPositionNFT` | [`0x2662e94AD1Eb77F265b179866e89C7Bc7aA34c60`](https://sepolia.etherscan.io/address/0x2662e94AD1Eb77F265b179866e89C7Bc7aA34c60) |
 | `MockYieldRouter` | [`0xa4F033fff30caa1525466EC792Ce6ae319F78a6b`](https://sepolia.etherscan.io/address/0xa4F033fff30caa1525466EC792Ce6ae319F78a6b) |
 | Uniswap V4 `PoolManager` | [`0xe03A1074c86CFEdd5C142C4F04F1a1536E203543`](https://sepolia.etherscan.io/address/0xe03A1074c86CFEdd5C142C4F04F1a1536E203543) |
 
@@ -317,7 +317,7 @@ Pool must be initialized with `LPFeeLibrary.DYNAMIC_FEE_FLAG` (`0x800000`).
 
 | Detail | Value |
 |---|---|
-| Pool ID | `0x0e32107f870f47cac70d5501dc91328470a9e53b583bc9c677bab6aaedb5436b` |
+| Pool ID | `0x24c5fcab9e2a6ff1922d947882d927d32b292d637851846197fad1652e354c32` |
 | TOKEN0 (VTKA) | [`0x2348De1A41A08F461C5bBCB46c21a7e82c20456b`](https://sepolia.etherscan.io/address/0x2348De1A41A08F461C5bBCB46c21a7e82c20456b) |
 | TOKEN1 (VTKB) | [`0x73A3c4f9F7725D23C358606f1C7048463C56C521`](https://sepolia.etherscan.io/address/0x73A3c4f9F7725D23C358606f1C7048463C56C521) |
 | Fee | Dynamic (`0x800000`) — controlled by VRS oracle |
@@ -457,7 +457,7 @@ forge test --gas-report
 - **PoolManager guard** — all hook callbacks revert if `msg.sender != address(poolManager)`
 - **Authorized updater pattern** — `VRSOracle` only accepts VRS updates from the RSC callback address or owner; no third party can manipulate the score
 - **Buffer JIT protection** — storm fees held in buffer rather than distributed immediately, preventing bots from depositing to snipe fee events
-- **ERC-4626 compliance** — YieldBuffer follows the standard vault interface, auditable and composable
+- **Dual-asset buffer** — tracks storm fees in both pool tokens; LPs claim their proportional share of each on distribution
 - **Fee cap** — V4's `MAX_LP_FEE` is enforced by the PoolManager; hook never exceeds 0.50% (5,000 in V4 units)
 - **Toxic threshold** — configurable per deployment to avoid false positives on legitimate large trades
 

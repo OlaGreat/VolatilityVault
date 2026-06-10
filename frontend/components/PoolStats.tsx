@@ -97,7 +97,7 @@ export function PoolStats() {
           Pool ID
         </p>
         <p className="text-[10px] font-mono break-all" style={{ color: '#475569' }}>
-          0x0e32107f870f47cac70d5501dc91328470a9e53b583bc9c677bab6aaedb5436b
+          0x24c5fcab9e2a6ff1922d947882d927d32b292d637851846197fad1652e354c32
         </p>
       </div>
 
