@@ -480,6 +480,129 @@ contract VolatilityVaultHookTest is Test {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Permissions
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_permissions_beforeSwap() public view {
+        assertTrue(hook.getHookPermissions().beforeSwap);
+    }
+
+    function test_permissions_afterSwap() public view {
+        assertTrue(hook.getHookPermissions().afterSwap);
+    }
+
+    function test_permissions_afterSwapReturnDelta() public view {
+        assertTrue(hook.getHookPermissions().afterSwapReturnDelta);
+    }
+
+    function test_permissions_afterAddLiquidity() public view {
+        assertTrue(hook.getHookPermissions().afterAddLiquidity);
+    }
+
+    function test_permissions_afterRemoveLiquidity() public view {
+        assertTrue(hook.getHookPermissions().afterRemoveLiquidity);
+    }
+
+    function test_permissions_unusedAreFalse() public view {
+        assertFalse(hook.getHookPermissions().beforeInitialize);
+        assertFalse(hook.getHookPermissions().beforeAddLiquidity);
+        assertFalse(hook.getHookPermissions().beforeDonate);
+        assertFalse(hook.getHookPermissions().beforeSwapReturnDelta);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // onlyPoolManager on every active callback
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_onlyPoolManager_afterRemoveLiquidity_reverts() public {
+        vm.prank(makeAddr("rando"));
+        vm.expectRevert(VolatilityVaultHook.NotPoolManager.selector);
+        hook.afterRemoveLiquidity(
+            address(this), poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: -1e18, salt: 0}),
+            BalanceDelta.wrap(0), BalanceDelta.wrap(0), ""
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Unused IHooks callbacks revert
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_beforeInitialize_reverts() public {
+        vm.expectRevert();
+        hook.beforeInitialize(address(this), poolKey, SQRT_PRICE_1_1);
+    }
+
+    function test_afterInitialize_reverts() public {
+        vm.expectRevert();
+        hook.afterInitialize(address(this), poolKey, SQRT_PRICE_1_1, 0);
+    }
+
+    function test_beforeAddLiquidity_reverts() public {
+        vm.expectRevert();
+        hook.beforeAddLiquidity(address(this), poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e18, salt: 0}), "");
+    }
+
+    function test_beforeRemoveLiquidity_reverts() public {
+        vm.expectRevert();
+        hook.beforeRemoveLiquidity(address(this), poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: -1e18, salt: 0}), "");
+    }
+
+    function test_beforeDonate_reverts() public {
+        vm.expectRevert();
+        hook.beforeDonate(address(this), poolKey, 0, 0, "");
+    }
+
+    function test_afterDonate_reverts() public {
+        vm.expectRevert();
+        hook.afterDonate(address(this), poolKey, 0, 0, "");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // setYieldBuffer access control
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_setYieldBuffer_ownerCanSet() public {
+        address nb = makeAddr("nb");
+        hook.setYieldBuffer(nb);   // test contract is hookOwner (tx.origin in etch deploy)
+        assertEq(hook.yieldBuffer(), nb);
+    }
+
+    function test_setYieldBuffer_revertsForNonOwner() public {
+        vm.prank(makeAddr("rando"));
+        vm.expectRevert("Not owner");
+        hook.setYieldBuffer(makeAddr("rando"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // afterSwap buffer fee scales with VRS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_bufferFee_higherDuringHurricaneThanCalm() public {
+        // Calm swap
+        oracle.updateVRS(10);
+        _swap(-1_000e18, true);
+        (, uint256 calmFees1,,,,,,,) = buffer.epochs(0);
+
+        // Hurricane swap of the same size
+        oracle.updateVRS(95);
+        _swap(-1_000e18, true);
+        (, uint256 totalFees1,,,,,,,) = buffer.epochs(0);
+
+        uint256 hurricaneFee = totalFees1 - calmFees1;
+        assertGt(hurricaneFee, calmFees1, "hurricane buffer fee > calm buffer fee");
+    }
+
+    function test_bufferFee_accruesToBufferOnSwap() public {
+        oracle.updateVRS(50);
+        _swap(-1_000e18, true);
+        (, uint256 fees1,,,,,,,) = buffer.epochs(0);
+        assertGt(fees1, 0, "swap accrued a buffer fee");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Helper
     // ─────────────────────────────────────────────────────────────────────────
 

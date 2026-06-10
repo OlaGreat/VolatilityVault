@@ -286,4 +286,129 @@ contract YieldBufferTest is Test {
         assertApproxEqAbs(token0.balanceOf(lpA), (uint256(fees0) * liqA) / total, 1);
         assertApproxEqAbs(token1.balanceOf(lpB), (uint256(fees1) * liqB) / total, 1);
     }
+
+    // ── deregisterLP ───────────────────────────────────────────────────────────
+
+    function test_deregisterLP_reducesLiquidity() public {
+        vm.startPrank(hook);
+        buffer.registerLP(lpA, LP_A_LIQ, YieldBuffer.PayoutPreference.DAILY);
+        buffer.deregisterLP(lpA, LP_A_LIQ / 2);
+        vm.stopPrank();
+        assertEq(buffer.lpLiquidity(lpA, 0), LP_A_LIQ / 2);
+    }
+
+    function test_deregisterLP_capsAtZero() public {
+        vm.startPrank(hook);
+        buffer.registerLP(lpA, LP_A_LIQ, YieldBuffer.PayoutPreference.DAILY);
+        buffer.deregisterLP(lpA, LP_A_LIQ * 100); // more than held
+        vm.stopPrank();
+        assertEq(buffer.lpLiquidity(lpA, 0), 0);
+    }
+
+    function test_deregisterLP_onlyHook() public {
+        vm.prank(rando());
+        vm.expectRevert(YieldBuffer.Unauthorized.selector);
+        buffer.deregisterLP(lpA, 1);
+    }
+
+    function rando() internal returns (address) { return makeAddr("rando"); }
+
+    // ── deployToYield: error branches ──────────────────────────────────────────
+
+    function test_deployToYield_cannotDeployTwice() public {
+        _accrue(FEES0, FEES1);
+        vm.startPrank(trigger);
+        buffer.deployToYield();
+        vm.expectRevert(YieldBuffer.AlreadyDeployed.selector);
+        buffer.deployToYield();
+        vm.stopPrank();
+    }
+
+    function test_deployToYield_singleToken0Only() public {
+        _accrue(FEES0, 0);
+        vm.prank(trigger);
+        buffer.deployToYield();
+        assertEq(router.balanceOf(address(token0)), FEES0);
+        assertEq(router.balanceOf(address(token1)), 0);
+    }
+
+    function test_deployToYield_ownerCanTrigger() public {
+        // owner (this test contract is NOT owner; deployer of buffer is this contract)
+        _accrue(FEES0, FEES1);
+        // owner bypass: the buffer owner is address(this)
+        buffer.deployToYield();
+        assertEq(router.balanceOf(address(token0)), FEES0);
+    }
+
+    // ── triggerDistribution: error branches ────────────────────────────────────
+
+    function test_triggerDistribution_marksEpochDistributed() public {
+        _accrue(FEES0, FEES1);
+        vm.prank(trigger);
+        buffer.triggerDistribution();
+        (,,,,,, bool isActive, bool isDistributed,) = _epoch(0);
+        assertFalse(isActive);
+        assertTrue(isDistributed);
+    }
+
+    function test_triggerDistribution_onlyTrigger() public {
+        _accrue(FEES0, FEES1);
+        vm.prank(makeAddr("notTrigger"));
+        vm.expectRevert(YieldBuffer.Unauthorized.selector);
+        buffer.triggerDistribution();
+    }
+
+    // ── claim with yield ─────────────────────────────────────────────────────────
+
+    function test_claim_includesYield() public {
+        vm.prank(hook);
+        buffer.registerLP(lpA, LP_A_LIQ, YieldBuffer.PayoutPreference.DAILY);
+        _accrue(FEES0, FEES1);
+        vm.prank(trigger);
+        buffer.deployToYield();
+        vm.warp(block.timestamp + 365 days);
+        vm.prank(trigger);
+        buffer.triggerDistribution();
+
+        (uint256 s0,) = buffer.previewClaim(lpA, 0);
+        assertGt(s0, FEES0); // includes yield on top of fees
+    }
+
+    // ── admin setters ────────────────────────────────────────────────────────────
+
+    function test_setHook_updates() public {
+        address nh = makeAddr("nh");
+        buffer.setHook(nh);
+        assertEq(buffer.hook(), nh);
+    }
+
+    function test_setHook_onlyOwner() public {
+        vm.prank(makeAddr("x"));
+        vm.expectRevert(YieldBuffer.Unauthorized.selector);
+        buffer.setHook(makeAddr("x"));
+    }
+
+    function test_setAuthorizedTrigger_updates() public {
+        address nt = makeAddr("nt");
+        buffer.setAuthorizedTrigger(nt);
+        assertEq(buffer.authorizedTrigger(), nt);
+    }
+
+    function test_setAuthorizedTrigger_onlyOwner() public {
+        vm.prank(makeAddr("x"));
+        vm.expectRevert(YieldBuffer.Unauthorized.selector);
+        buffer.setAuthorizedTrigger(makeAddr("x"));
+    }
+
+    function test_setYieldRouter_updates() public {
+        address nr = makeAddr("nr");
+        buffer.setYieldRouter(nr);
+        assertEq(address(buffer.yieldRouter()), nr);
+    }
+
+    function test_setYieldRouter_onlyOwner() public {
+        vm.prank(makeAddr("x"));
+        vm.expectRevert(YieldBuffer.Unauthorized.selector);
+        buffer.setYieldRouter(makeAddr("x"));
+    }
 }

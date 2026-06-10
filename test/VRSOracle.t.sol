@@ -142,4 +142,58 @@ contract VRSOracleTest is Test {
         vm.expectRevert(VRSOracle.InvalidScore.selector);
         oracle.updateVRS(score);
     }
+
+    // ── getRiskLevel — every tier + boundaries ─────────────────────────────────
+
+    function test_riskLevel_calm_zero()       public { oracle.updateVRS(0);   assertEq(oracle.getRiskLevel(), "CALM"); }
+    function test_riskLevel_calm_boundary()   public { oracle.updateVRS(30);  assertEq(oracle.getRiskLevel(), "CALM"); }
+    function test_riskLevel_cloudy_lower()    public { oracle.updateVRS(31);  assertEq(oracle.getRiskLevel(), "CLOUDY"); }
+    function test_riskLevel_cloudy_boundary() public { oracle.updateVRS(60);  assertEq(oracle.getRiskLevel(), "CLOUDY"); }
+    function test_riskLevel_storm_lower()     public { oracle.updateVRS(61);  assertEq(oracle.getRiskLevel(), "STORM"); }
+    function test_riskLevel_storm_boundary()  public { oracle.updateVRS(80);  assertEq(oracle.getRiskLevel(), "STORM"); }
+    function test_riskLevel_hurricane_lower() public { oracle.updateVRS(81);  assertEq(oracle.getRiskLevel(), "HURRICANE"); }
+    function test_riskLevel_hurricane_max()   public { oracle.updateVRS(100); assertEq(oracle.getRiskLevel(), "HURRICANE"); }
+
+    // ── getFee — exact tier boundaries ─────────────────────────────────────────
+
+    function test_fee_boundary_30_31() public {
+        oracle.updateVRS(30); assertEq(oracle.getFee(), 500);
+        oracle.updateVRS(31); assertEq(oracle.getFee(), 1_500);
+    }
+
+    function test_fee_boundary_60_61() public {
+        oracle.updateVRS(60); assertEq(oracle.getFee(), 1_500);
+        oracle.updateVRS(61); assertEq(oracle.getFee(), 3_000);
+    }
+
+    function test_fee_boundary_80_81() public {
+        oracle.updateVRS(80); assertEq(oracle.getFee(), 3_000);
+        oracle.updateVRS(81); assertEq(oracle.getFee(), 5_000);
+    }
+
+    // ── lastUpdated ────────────────────────────────────────────────────────────
+
+    function test_lastUpdated_setOnUpdate() public {
+        vm.warp(999_999);
+        oracle.updateVRS(50);
+        assertEq(oracle.lastUpdated(), 999_999);
+    }
+
+    // ── fuzz: fee mapping is correct & bounded for every valid score ───────────
+
+    function testFuzz_getFee_matchesTier(uint8 score) public {
+        score = uint8(bound(score, 0, 100));
+        oracle.updateVRS(score);
+        uint24 fee = oracle.getFee();
+        if (score <= 30)      assertEq(fee, 500);
+        else if (score <= 60) assertEq(fee, 1_500);
+        else if (score <= 80) assertEq(fee, 3_000);
+        else                  assertEq(fee, 5_000);
+    }
+
+    function testFuzz_isStorm_matchesThreshold(uint8 score) public {
+        score = uint8(bound(score, 0, 100));
+        oracle.updateVRS(score);
+        assertEq(oracle.isStorm(), score > 60);
+    }
 }
