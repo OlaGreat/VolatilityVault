@@ -1,6 +1,8 @@
 # VolatilityVault
 
-> A Uniswap V4 hook that taxes arbitrageurs predictively using cross-chain AI — raising LP fees before volatility hits and routing storm profits into a yield-bearing buffer that pays LPs back with compounded yield.
+> A Uniswap V4 hook that prices volatility into the swap fee — using a Reactive Network smart contract to score on-chain volatility, raising LP fees as risk rises, and routing the extra fees into a yield buffer that pays LPs back when markets calm down.
+
+> **Note on scope:** This is a working hackathon prototype on Ethereum Sepolia. The volatility score is a transparent on-chain heuristic today, designed to be swapped for a trained ML model without changing the hook; the yield router is a mock on testnet; and the Reactive contract currently subscribes to Uniswap V4 swaps on Sepolia. The "Roadmap" notes throughout mark what is vision vs. what is live.
 
 ---
 
@@ -28,28 +30,28 @@ Every existing solution to this problem reacts after the damage is done. Reactiv
 
 ## The Solution
 
-VolatilityVault is a Uniswap V4 hook powered by a cross-chain AI volatility model. A Reactive Smart Contract monitors price gaps forming across five chains simultaneously and feeds that data into an AI oracle that outputs a single number every block — the **Volatility Risk Score (VRS)**. The hook reads this score before every swap and raises the pool fee to match the risk level. During high-volatility periods, extra fees flow into a yield-bearing buffer that earns additional yield on Aave or Morpho, then distributes back to LPs when the storm passes — with compounded interest on top.
+VolatilityVault is a Uniswap V4 hook driven by a Reactive Smart Contract. The RSC subscribes to Uniswap V4 `Swap` events on Ethereum Sepolia, computes a **Volatility Risk Score (VRS)** from on-chain signals, and relays it cross-chain via a callback to an on-chain oracle. The hook reads that score before every swap and raises the pool fee to match the risk level. During high-volatility periods, the hook skims an extra fee into a yield buffer, which earns additional yield through a yield router and then distributes back to LPs when markets calm down.
 
-LPs set their intent once at deposit. The system manages everything else automatically.
+LPs set their intent once at deposit. The protection loop then runs on-chain on its own.
 
 ---
 
 ## How It Works
 
-### Step 1 — Reactive Network Watches Five Chains
+### Step 1 — A Reactive Smart Contract Watches Swaps
 
-A Reactive Smart Contract (`VolatilityRSC`) monitors on-chain activity across Ethereum, Arbitrum, Base, Polygon, and BSC every single block. It watches for:
+A Reactive Smart Contract (`VolatilityRSC`) deployed on Reactive Lasna subscribes to Uniswap V4 `Swap` events on Ethereum Sepolia. Every time a swap fires, the RSC reacts inside the ReactVM and reads two on-chain signals from the event:
 
-- Price gaps forming between Uniswap and reference exchange prices
-- Volume acceleration — swap rate per block increasing sharply
-- Large directional wallet movements from known arbitrage addresses
-- Cross-pool divergence — correlated pairs moving apart
+- **Price velocity** — how far the pool price moved since the last swap
+- **Swap frequency** — how many swaps occurred in a recent block window
 
-When signals appear, the RSC aggregates them into a feature vector and passes it to the AI oracle.
+> **Roadmap:** the subscription model extends to multiple chains (Reactive supports many origins), and the signal set can grow to include reference-price gaps and wallet-pattern detection. Today it runs on Sepolia with the two signals above.
 
-### Step 2 — AI Oracle Outputs the Volatility Risk Score
+The RSC combines these into the Volatility Risk Score.
 
-The AI model — trained using Proximal Policy Optimization (PPO) on historical on-chain volatility patterns — processes the feature vector and outputs a single number every block: the **Volatility Risk Score**, 0 to 100.
+### Step 2 — The RSC Computes the Volatility Risk Score
+
+The scoring function combines price velocity and swap frequency into a single number from 0 to 100 — the **Volatility Risk Score**. It is a transparent on-chain heuristic (you can read it in `reactive/VolatilityRSC.sol`), deliberately kept simple and auditable. The architecture is built so this scorer can be replaced by a trained ML model (e.g. a PPO policy served via an oracle) **without changing the hook or any other contract** — the hook only ever reads a number from the oracle.
 
 ```
 0 ──────────────────────────────────── 100
@@ -74,22 +76,20 @@ The arbitrageur still executes — the cross-chain price gap still makes it prof
 
 ### Step 4 — Toxic Order Flow Detection
 
-Inspired by [Angstrom](https://www.paradigm.xyz/2024/04/angstrom), the hook also detects who is swapping. When VRS is high **and** the swap is unusually large and directional — a clear sign of arbitrage — the hook emits a `ToxicOrderDetected` event. This triggers an additional surcharge routed directly to LP wallets, not to the general fee pool. Regular users making small swaps are never affected.
+Inspired by [Angstrom](https://www.paradigm.xyz/2024/04/angstrom), the hook also looks at *how* the pool is being swapped. When VRS is high **and** the swap is unusually large and directional — a signal of likely arbitrage — the hook emits a `ToxicOrderDetected` event. Regular users making small swaps never trigger it.
+
+> **Roadmap:** today this emits an on-chain event flagging the toxic order; a follow-up will route an additional surcharge from flagged orders directly to LP wallets.
 
 ### Step 5 — Storm Fees Flow Into the Yield Buffer
 
 Fees collected during storm periods do not get distributed immediately. Instant fee distribution creates JIT (just-in-time) liquidity attacks — bots deposit right before a large swap, collect fees, and withdraw immediately after.
 
-Instead, storm fees flow into `YieldBuffer.sol` — a dual-asset buffer (tracks both pool tokens). An AI agent automatically deploys the buffer to the highest-yielding protocol available:
+Instead, storm fees flow into `YieldBuffer.sol` — a dual-asset buffer that tracks both pool tokens. While they sit there, the buffer deploys them to a yield router to earn extra return, then distributes everything back when the storm passes.
 
-```
-YieldBuffer checks lending rates every N blocks:
-  Aave paying 8%?    → deploy there
-  Morpho paying 11%? → move there instead
-  Rates change?      → rebalance automatically
-```
+> **Built today:** the buffer is wired to a `MockYieldRouter` on testnet that returns a fixed yield, so the full deploy → earn → distribute → claim cycle works end-to-end.
+> **Roadmap:** swap the mock for an `AaveYieldRouter` / `MorphoYieldRouter` that routes to whichever lending market pays best. The buffer takes a router address, so this is a drop-in change.
 
-When the VRS drops back to calm, Reactive Network triggers a distribution event. Each LP receives their proportional share of the storm fees **plus all the yield earned** while the buffer was deployed.
+When the VRS drops back to calm, a distribution is triggered (by the Reactive RSC, or the owner in the demo). Each LP receives their proportional share of the storm fees **plus the yield earned** while the buffer was deployed.
 
 ### Step 6 — LP Intent and Personalization
 
@@ -114,16 +114,15 @@ struct LPIntent {
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│         REACTIVE NETWORK — The Cross-Chain Watchtower                   │
+│         REACTIVE LASNA — The Cross-Chain Watcher                        │
 │                                                                         │
-│  Monitors: Ethereum · Arbitrum · Base · Polygon · BSC (every block)    │
-│  Watches:  price gaps, volume spikes, wallet movements, divergence     │
+│  Subscribes to: Uniswap V4 Swap events on Ethereum Sepolia             │
+│  Signals:       price velocity + swap frequency  (extensible)          │
 │                                                                         │
 │  VolatilityRSC.sol                                                      │
-│  - Subscribes to price feeds + pool events across 5 chains             │
-│  - Aggregates signals into feature vector every block                  │
-│  - Calls AI oracle with current pool state                             │
-│  - When VRS changes → pushes callback to VRSOracle on dest. chain      │
+│  - Reacts in the ReactVM on every subscribed Swap event                │
+│  - Computes the Volatility Risk Score (0–100)                          │
+│  - When VRS changes → callback to VRSOracle on the destination chain   │
 │  - When VRS normalizes → triggers YieldBuffer distribution             │
 └───────────────────────────────┬─────────────────────────────────────────┘
                                 │ callback: updateVRS(score)
@@ -149,7 +148,7 @@ struct LPIntent {
 │                   │ storm fees                                          │
 │                   ▼                                                     │
 │  YieldBuffer.sol (dual-asset)                                            │
-│  - Holds storm-period fees, earns yield on Aave / Morpho              │
+│  - Holds storm-period fees, earns yield via a yield router            │
 │  - Distributes to LPs on Reactive trigger (fees + yield earned)       │
 │  - Respects each LP's PayoutPreference                                 │
 │                                                                         │
@@ -165,14 +164,14 @@ struct LPIntent {
 
 **Process 1 — Background intelligence (runs 24/7)**
 
-Reactive Network continuously monitors pool events and price feeds across five chains. Every block, the RSC updates its feature vector. When the VRS changes significantly, it pushes a fresh score to `VRSOracle.sol` on the destination chain. By the time a swap arrives, the score is already sitting in the oracle — current, local, readable in a single storage call.
+The Reactive RSC reacts to Uniswap V4 swaps on Sepolia. On each reaction it recomputes the VRS, and when the score changes meaningfully it pushes a fresh value to `VRSOracle.sol` on the destination chain. By the time the next swap arrives, the score is already sitting in the oracle — current, local, readable in a single storage call.
 
 ```
-Price gap forms on Coinbase / volume spike on Arbitrum
-  → Reactive RSC aggregates signals
-  → AI oracle outputs new VRS
+A swap happens on the Sepolia V4 pool
+  → Reactive RSC reacts in the ReactVM
+  → recomputes the Volatility Risk Score
   → RSC callback: VRSOracle.updateVRS(score)
-  → oracle is ready before any swap arrives
+  → oracle is ready before the next swap arrives
 ```
 
 **Process 2 — Per-swap fee adjustment (happens on demand)**
@@ -206,20 +205,23 @@ User submits swap to pool
 ```
 VolatilityVault/
 ├── src/
-│   ├── VolatilityVaultHook.sol    # Core V4 hook — dynamic fee, toxic detection, LP intent
+│   ├── VolatilityVaultHook.sol    # Core V4 hook — dynamic fee, fee skim, toxic detection, LP intent
 │   ├── VRSOracle.sol              # Stores VRS score, maps to fee tiers
 │   ├── YieldBuffer.sol            # Dual-asset buffer — storm fees (both tokens) + yield routing
 │   ├── LPPositionNFT.sol          # ERC-721 — minted on deposit, stores LPIntent
+│   ├── VRSCallbackReceiver.sol    # Reactive callback adapter → forwards to oracle / buffer
 │   └── mocks/
 │       ├── MockRSC.sol            # Simulates Reactive RSC for local testing
-│       └── MockYieldRouter.sol    # Stubbed Aave/Morpho for local testing
+│       └── MockYieldRouter.sol    # Mock yield router (Aave/Morpho planned)
 ├── reactive/
 │   └── VolatilityRSC.sol          # Reactive Smart Contract (deployed on Reactive Network)
-├── test/
-│   ├── VRSOracle.t.sol            # 17 tests — score updates, fee tiers, access control, fuzz
-│   ├── VolatilityVaultHook.t.sol  # Fee override, toxic detection, LP intent registration
-│   ├── YieldBuffer.t.sol          # Dual-asset accrual, yield routing, distribution, claims
-│   └── Integration.t.sol          # End-to-end: oracle → hook → buffer → LP payout
+├── test/                          # 194 tests, 94.8% coverage
+│   ├── VRSOracle.t.sol            # 31 — score updates, fee tiers, access, fuzz
+│   ├── VolatilityVaultHook.t.sol  # 36 — fee tiers, toxic detection, LP intent, end-to-end claim
+│   ├── YieldBuffer.t.sol          # 34 — dual-asset accrual, distribution, claims, errors, fuzz
+│   ├── LPPositionNFT.t.sol        # 38 — mint/update/burn, intent, access, fuzz
+│   ├── VRSCallbackReceiver.t.sol  # 31 — callback forwarding, access, pay/withdraw, fuzz
+│   └── VolatilityRSC.t.sol        # 24 — react() scoring, callbacks, admin, fuzz
 ├── script/
 │   ├── DeployHook.s.sol           # Mines CREATE2 salt, deploys hook to correct address
 │   ├── DeployRSC.s.sol            # Deploys VolatilityRSC to Reactive Network
@@ -237,12 +239,12 @@ VolatilityVault/
 
 | Technology | Role |
 |---|---|
-| Uniswap V4 | Core AMM — hook intercepts every swap for dynamic fee override |
-| Reactive Network | Cross-chain event monitoring + VRS callback delivery + buffer trigger |
-| Aave V3 / Morpho | Yield routing for the storm fee buffer |
-| Foundry | Development, testing, deployment |
+| Uniswap V4 | Core AMM — hook intercepts every swap for dynamic fee override + fee skim |
+| Reactive Network | Cross-chain Swap-event subscription + VRS callback delivery + buffer trigger |
+| Yield router | `MockYieldRouter` on testnet; Aave V3 / Morpho planned (drop-in router) |
+| Foundry | Development, testing (194 tests), deployment |
 | Solidity 0.8.26 | Smart contract language |
-| Next.js + wagmi + viem | Frontend dashboard |
+| Next.js + wagmi v2 + viem + RainbowKit | Frontend dashboard |
 
 ---
 
@@ -266,17 +268,18 @@ VolatilityVault/
 ### Reactive Network
 
 **Where in the code:**
-- `reactive/VolatilityRSC.sol` — Reactive Smart Contract deployed on Reactive Network. Subscribes to price feed events and pool activity across five chains. Calls AI oracle and pushes VRS via callback to `VRSOracle.sol`. Also triggers `YieldBuffer` distribution when VRS normalizes.
-- `src/VRSOracle.sol` — `authorizedUpdater` is set to the RSC callback proxy address. Only that address can push VRS scores.
+- `reactive/VolatilityRSC.sol` — Reactive Smart Contract deployed on Reactive Lasna. Subscribes to Uniswap V4 `Swap` events on Sepolia, computes the VRS in the ReactVM, and pushes it via callback to `VRSCallbackReceiver.sol`. Also triggers `YieldBuffer` distribution when VRS normalizes.
+- `src/VRSCallbackReceiver.sol` — destination-chain adapter that authorizes only the Reactive callback proxy and forwards to `VRSOracle` / `YieldBuffer`.
+- `src/VRSOracle.sol` — `authorizedUpdater` is set to the callback receiver. Only it (or the owner) can push VRS scores.
 - `script/DeployRSC.s.sol` — deploys and configures the RSC.
 
 **What the integration does:**
-Without Reactive Network, the hook only sees single-chain signals, which are noisier and arrive after the arbitrage has already landed. Reactive is what makes the predictive layer possible.
+The cross-chain reaction is what makes the hook autonomous — the fee updates from real swap activity with no off-chain keeper.
 
-1. **Cross-chain event subscription** — price gaps and volume spikes across 5 networks feed into the same RSC
-2. **AI oracle delivery** — RSC calls the oracle off-chain and delivers the VRS result via callback transaction to `VRSOracle.sol`
-3. **Conditional buffer trigger** — when VRS drops to calm, Reactive automatically triggers LP distribution without any manual claim
-4. **Asynchronous yield rebalancing** — buffer moves between Aave and Morpho when rate differentials justify it
+1. **Cross-chain event subscription** — the RSC subscribes to Sepolia V4 swaps from Reactive Lasna (the model extends to more chains/events)
+2. **Callback delivery** — the RSC emits a callback that the Reactive signer posts to Sepolia, updating the on-chain oracle
+3. **Conditional buffer trigger** — when VRS returns to calm, the RSC can trigger LP distribution automatically
+4. **Verified live** — a real Sepolia swap moved the on-chain VRS with no manual input; reactions are visible on reactscan
 
 ---
 
@@ -442,13 +445,19 @@ forge test --gas-report
 
 **Test suite:**
 
+**194 tests, 94.8% line coverage** — happy and unhappy paths, every error case as its own test, plus fuzz tests on every contract.
+
 | Suite | Tests | What it covers |
 |---|---|---|
-| `VRSOracleTest` | 17 | Score updates, fee tiers, access control, 2 fuzz suites (256 runs each) |
-| `VolatilityVaultHookTest` | 18 | Dynamic fee override, toxic order detection, LP intent registration, onlyPoolManager guard — full PoolManager integration |
-| `YieldBufferTest` | 24 | LP registration, fee accrual, yield deployment, epoch distribution, proportional claims, multi-epoch, 1 fuzz suite |
-| `IntegrationTest` | WIP | Oracle → hook → buffer → LP payout end-to-end |
-| **Total** | **59** | **All passing** |
+| `LPPositionNFTTest` | 38 | mint / update / burn, intent storage, access control, transferability, fuzz — 100% |
+| `VolatilityVaultHookTest` | 36 | dynamic fee tiers, toxic-order detection, LP intent, buffer fee accrual, end-to-end deposit→swap→claim, permissions, all unused-callback reverts, fuzz |
+| `YieldBufferTest` | 34 | dual-asset accrual, deploy / distribute / claim, yield, deregister, every error, admin, fuzz |
+| `VRSOracleTest` | 31 | every fee tier + boundary, all risk levels, access control, fuzz — 100% |
+| `VRSCallbackReceiverTest` | 31 | callback forwarding, proxy/owner access, pay/withdraw, admin rotation, fuzz — 100% |
+| `VolatilityRSCTest` | 24 | `react()` VRS computation, callback emission, storm→calm distribution, admin, fuzz |
+| **Total** | **194** | **All passing** |
+
+Run `forge coverage` to reproduce. The uncovered lines are defensive/infrastructure paths (Reactive system-contract glue, `require` failure branches) that can't be unit-tested without mocking Reactive's network.
 
 ---
 
