@@ -19,3 +19,8 @@ Thumbs.db
 
 # Dependencies (managed by forge install)
 # lib/ is committed so collaborators don't need to reinstall
+
+# AI tooling artifacts
+CLAUDE.md
+AGENTS.md
+.claude/
